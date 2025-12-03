@@ -1,10 +1,12 @@
 import win32evtlog  # requires to have pywin32 installed.
 import win32api
 import win32con
-# needed for the security permission (but still requires to run as admin).
 import win32security
+import pywintypes
+# needed for the security permission (but still requires to run as admin).
 import ctypes
 import os  # modules for checking admin rights
+import argparse
 
 
 def checkforAdminRights():
@@ -24,43 +26,70 @@ def securityPermission():
     win32security.AdjustTokenPrivileges(token, False, newPrivs)
 
 
-def getTotalsOfSources(server, logTypes):
-    for log in logTypes:
-        evtHandle = win32evtlog.OpenEventLog(server, log)
-        total = win32evtlog.GetNumberOfEventLogRecords(evtHandle)
-        print("Logs in %s = %d" % (log, total))
+def getTotalsOfSource(server, source):
+    evtHandle = win32evtlog.OpenEventLog(server, source)
+    total = win32evtlog.GetNumberOfEventLogRecords(evtHandle)
+    print("Logs in %s= % d\n" % (source, total))
+    win32evtlog.CloseEventLog(evtHandle)
 
 
-def main(server, logTypes):
+def readEventLogs(server, args):
+    evtHandle = None
     try:
-        print("Sources:\n")
-        if (checkforAdminRights() != True):
-            raise SystemExit("Exiting due to not running as administrator.")
-        securityPermission()
-        getTotalsOfSources(server, logTypes)
-        logno = None
-        while logno not in [0, 1, 2]:
-            logno = int(input(
-                "Which source would you like to use? [1 - Application, 2 - System, 3 - Security]\n>"))-1
+        # reads oldest to newest by dafault, unless specific by user args to be reversed.
+        flags = win32evtlog.EVENTLOG_FORWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+        if (args.reverse):
+            flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+        evtHandle = win32evtlog.OpenEventLog(server, args.source)
+        count = 0
+        while 1:
+            logs = win32evtlog.ReadEventLog(evtHandle, flags, 0)
+            if not logs:
+                break
+            for event in logs:
+                if count == args.max:
+                    return
+                print(f"evtID: {event.EventID & 0xFFFF}\ntime: {event.TimeGenerated.Format()}\nsource: {event.SourceName}\n"
+                      f"evtCat: {event.EventCategory}\ncomputer: {event.ComputerName}\n"
+                      f"recNo: {event.RecordNumber}\ntext: {event.StringInserts or []}")
+                print("\n"+"_"*60)
+                count += 1
 
-        # this reads the logs sequentially from newest to oldest.
-        evtHandle = win32evtlog.OpenEventLog(server, logTypes[logno])
-        flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
-
-        logs = win32evtlog.ReadEventLog(evtHandle, flags, 0)
-
-        for event in logs:
-            print(f"evtID: {event.EventID}\ntime: {event.TimeGenerated}\nsource: {event.SourceName}\n"
-                  f"evtCat: {event.EventCategory}\ncomputer: {event.ComputerName}\n"
-                  f"recNo: {event.RecordNumber}\ntext: {event.StringInserts}")
-            print("\n"+"_"*60)
     except SystemExit as e:
         print(f"Error: {e}")
-    except ValueError as e:
-        print(f"Error: {e}")
+    except pywintypes.error as e:
+        print(f"Error reading logs: {e}")
+    except win32evtlog.error as e:
+        print(f"Error reading logs: {e}")
+    finally:
+        if evtHandle:
+            win32evtlog.CloseEventLog(evtHandle)
+
+
+def main(server, args):
+    print("Source:")
+    if not checkforAdminRights():
+        print("Error: This program must run as administrator")
+        return
+    securityPermission()
+    getTotalsOfSource(server, args.source)
+    readEventLogs(server, args)
+
+
+def addArgs():
+    pars = argparse.ArgumentParser(
+        prog='loganalyzer')
+    pars.add_argument(
+        '-s', '--source', help='the window log source to read from. sources available : [application, system, security]', required=True)
+    pars.add_argument(
+        '-m', '--max', help='maximum logs to be displayed. (default = 10)', type=int, default=10)
+    pars.add_argument('-r', '--reverse',
+                      help='read in reverse or backwards.', action='store_true')
+
+    return pars.parse_args()
 
 
 if __name__ == "__main__":
     server = None
-    logTypes = ["Application", "System", "Security"]
-    main(server, logTypes)
+    args = addArgs()
+    main(server, args)
