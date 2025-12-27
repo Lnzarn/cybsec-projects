@@ -67,10 +67,10 @@ def readEventLogs(server, args):
 
 
 def main(server, args):
-    print("Source:")
     if not checkforAdminRights():
         print("Error: This program must run as administrator")
         return
+    print("Source:")
     securityPermission()
     getTotalsOfSource(server, args.source)
     readEventLogs(server, args)
